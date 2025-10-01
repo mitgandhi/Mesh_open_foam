@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Iterable, Optional
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -23,7 +24,7 @@ from mesh_converter.converter import (
 )
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert STEP geometry to ABAQUS INP meshes or stretch existing INP files"
     )
@@ -59,10 +60,140 @@ def parse_args() -> argparse.Namespace:
         default=0.0,
         help="Additional length to add along the Z direction when stretching INP files.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
+
+
+def _interactive_mode() -> None:
+    try:
+        import tkinter as tk
+        from tkinter import filedialog, messagebox, simpledialog
+    except Exception as exc:  # pragma: no cover - GUI fallback only
+        raise SystemExit(
+            "Interactive mode requires tkinter to be available.\n"
+            f"Encountered error: {exc}"
+        )
+
+    root = tk.Tk()
+    root.withdraw()
+
+    input_path = filedialog.askopenfilename(
+        title="Select STEP or INP file",
+        filetypes=(
+            ("STEP files", "*.stp *.step"),
+            ("INP files", "*.inp"),
+            ("All files", "*.*"),
+        ),
+    )
+
+    if not input_path:
+        messagebox.showinfo("Mesh Converter", "No input file selected. Exiting.")
+        root.destroy()
+        return
+
+    input_path = Path(input_path)
+    input_suffix = input_path.suffix.lower()
+
+    try:
+        if input_suffix in {".stp", ".step"}:
+            output_path = filedialog.asksaveasfilename(
+                title="Save INP file as",
+                defaultextension=".inp",
+                initialfile=f"{input_path.stem}.inp",
+                filetypes=(("INP files", "*.inp"), ("All files", "*.*")),
+            )
+
+            if not output_path:
+                messagebox.showinfo("Mesh Converter", "No output file selected. Exiting.")
+                root.destroy()
+                return
+
+            output = Path(output_path)
+            summary: ConversionSummary = convert_step_to_inp(input_path, output)
+
+            message = (
+                "Conversion finished\n"
+                f"Nodes: {summary.node_count}\n"
+                f"Elements: {summary.element_count}\n"
+                f"Ignored duplicates: {summary.ignored_points}\n"
+                f"Output written to: {output}"
+            )
+            messagebox.showinfo("Mesh Converter", message)
+        elif input_suffix == ".inp":
+            output_path = filedialog.asksaveasfilename(
+                title="Save stretched INP file as",
+                defaultextension=".inp",
+                initialfile=f"{input_path.stem}_stretched.inp",
+                filetypes=(("INP files", "*.inp"), ("All files", "*.*")),
+            )
+
+            if not output_path:
+                messagebox.showinfo("Mesh Converter", "No output file selected. Exiting.")
+                root.destroy()
+                return
+
+            extend_x = simpledialog.askfloat(
+                "Extend X",
+                "Additional length along X direction",
+                initialvalue=0.0,
+            )
+            extend_y = simpledialog.askfloat(
+                "Extend Y",
+                "Additional length along Y direction",
+                initialvalue=0.0,
+            )
+            extend_z = simpledialog.askfloat(
+                "Extend Z",
+                "Additional length along Z direction",
+                initialvalue=0.0,
+            )
+
+            if extend_x is None or extend_y is None or extend_z is None:
+                messagebox.showinfo("Mesh Converter", "Stretch values not provided. Exiting.")
+                root.destroy()
+                return
+
+            output = Path(output_path)
+            stretch_summary: StretchSummary = stretch_inp_geometry(
+                input_path,
+                output,
+                extend_x=extend_x,
+                extend_y=extend_y,
+                extend_z=extend_z,
+            )
+
+            ox, oy, oz = stretch_summary.original_lengths
+            nx, ny, nz = stretch_summary.new_lengths
+
+            lines = [
+                "Stretching finished",
+                f"Nodes processed: {stretch_summary.node_count}",
+            ]
+            if stretch_summary.entity_set:
+                lines.append(f"Entity set stretched: {stretch_summary.entity_set}")
+            lines.extend(
+                [
+                    "Original extents: "
+                    f"X={ox:.6f}, Y={oy:.6f}, Z={oz:.6f}",
+                    "Updated extents: "
+                    f"X={nx:.6f}, Y={ny:.6f}, Z={nz:.6f}",
+                    f"Output written to: {output}",
+                ]
+            )
+
+            messagebox.showinfo("Mesh Converter", "\n".join(lines))
+        else:
+            raise InputFileError("Input file must have a .stp, .step or .inp extension")
+    except (InputFileError, StepParseError, InpParseError) as exc:
+        messagebox.showerror("Mesh Converter", str(exc))
+    finally:
+        root.destroy()
 
 
 def main() -> None:
+    if len(sys.argv) == 1:
+        _interactive_mode()
+        return
+
     args = parse_args()
     input_suffix = args.input.suffix.lower()
     output = args.output
