@@ -105,6 +105,8 @@ def main() -> None:
 
         print("Stretching finished")
         print(f"Nodes processed: {stretch_summary.node_count}")
+        if stretch_summary.entity_set:
+            print(f"Entity set stretched: {stretch_summary.entity_set}")
         ox, oy, oz = stretch_summary.original_lengths
         nx, ny, nz = stretch_summary.new_lengths
         print(

@@ -14,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
-from typing import Iterable, List, Sequence, Tuple
+from typing import Dict, Iterable, List, Sequence, Tuple
 
 Coordinate = Tuple[float, float, float]
 
@@ -38,6 +38,16 @@ class ConversionSummary:
     node_count: int
     element_count: int
     ignored_points: int = 0
+
+
+@dataclass
+class StretchSummary:
+    """Summary of the INP stretching operation."""
+
+    node_count: int
+    original_lengths: Tuple[float, float, float]
+    new_lengths: Tuple[float, float, float]
+    entity_set: str | None = None
 
 
 
@@ -74,6 +84,8 @@ _NODE_LINE_PATTERN = re.compile(
     r"(?P<z>[-+]?[0-9]*\.?[0-9]+(?:[Ee][-+]?[0-9]+)?)"
     r"(?P<suffix>.*)$"
 )
+
+_NSET_NAME_PATTERN = re.compile(r"nset\s*=\s*([^,]+)", re.IGNORECASE)
 
 
 def _normalise_coordinates(coordinates: Iterable[Coordinate]) -> List[Coordinate]:
@@ -226,12 +238,96 @@ def _collect_inp_nodes(lines: Sequence[str]) -> List[_NodeRecord]:
     return nodes
 
 
+def _collect_inp_node_sets(lines: Sequence[str]) -> Dict[str, List[int]]:
+    """Extract node set definitions from an INP file."""
+
+    node_sets: Dict[str, List[int]] = {}
+    seen: Dict[str, set[int]] = {}
+    generating: Dict[str, bool] = {}
+    current_set: str | None = None
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        if stripped.startswith("*"):
+            current_set = None
+            if stripped.lower().startswith("*nset"):
+                match = _NSET_NAME_PATTERN.search(stripped)
+                if not match:
+                    continue
+                current_set = match.group(1).strip()
+                if current_set not in node_sets:
+                    node_sets[current_set] = []
+                    seen[current_set] = set()
+                generating[current_set] = "generate" in stripped.lower()
+            continue
+
+        if current_set is None:
+            continue
+
+        tokens = [token.strip() for token in stripped.split(",") if token.strip()]
+        if not tokens:
+            continue
+
+        if generating.get(current_set):
+            try:
+                start = int(tokens[0])
+                end = int(tokens[1]) if len(tokens) > 1 else start
+                step = int(tokens[2]) if len(tokens) > 2 else 1
+            except ValueError:
+                continue
+
+            if step == 0:
+                continue
+
+            direction = 1 if step > 0 else -1
+            end_inclusive = end + direction
+            for node_id in range(start, end_inclusive, step):
+                if node_id not in seen[current_set]:
+                    seen[current_set].add(node_id)
+                    node_sets[current_set].append(node_id)
+            continue
+
+        for token in tokens:
+            try:
+                node_id = int(token)
+            except ValueError:
+                continue
+
+            if node_id not in seen[current_set]:
+                seen[current_set].add(node_id)
+                node_sets[current_set].append(node_id)
+
+    return node_sets
+
+
+def list_inp_entity_sets(input_path: Path | str) -> Dict[str, List[int]]:
+    """Return a mapping of node set names to node identifiers for an INP file."""
+
+    input_path = Path(input_path)
+
+    if not input_path.exists():
+        raise InputFileError(f"Input INP file does not exist: {input_path}")
+
+    if input_path.suffix.lower() != ".inp":
+        raise InputFileError("Entity sets can only be listed for .inp files")
+
+    text = input_path.read_text(encoding="utf-8", errors="ignore")
+    lines = text.splitlines()
+
+    return _collect_inp_node_sets(lines)
+
+
 def stretch_inp_geometry(
     input_path: Path | str,
     output_path: Path | str,
     extend_x: float = 0.0,
     extend_y: float = 0.0,
     extend_z: float = 0.0,
+    target_node_ids: Sequence[int] | None = None,
+    entity_name: str | None = None,
 ) -> StretchSummary:
     """Stretch the spatial extents of an INP mesh along the principal axes.
 
@@ -259,9 +355,17 @@ def stretch_inp_geometry(
     if not nodes:
         raise InpParseError("No *Node section found in the INP file")
 
-    xs = [node.x for node in nodes]
-    ys = [node.y for node in nodes]
-    zs = [node.z for node in nodes]
+    if target_node_ids is not None:
+        target_set = set(target_node_ids)
+        stretch_nodes = [node for node in nodes if node.node_id in target_set]
+        if not stretch_nodes:
+            raise InpParseError("The selected entity set does not contain any nodes")
+    else:
+        stretch_nodes = nodes
+
+    xs = [node.x for node in stretch_nodes]
+    ys = [node.y for node in stretch_nodes]
+    zs = [node.z for node in stretch_nodes]
 
     min_x, max_x = min(xs), max(xs)
     min_y, max_y = min(ys), max(ys)
@@ -298,7 +402,12 @@ def stretch_inp_geometry(
 
     new_lines = list(lines)
 
+    target_set = None if target_node_ids is None else set(target_node_ids)
+
     for node in nodes:
+        if target_set is not None and node.node_id not in target_set:
+            continue
+
         new_x = min_x + (node.x - min_x) * scales[0]
         new_y = min_y + (node.y - min_y) * scales[1]
         new_z = min_z + (node.z - min_z) * scales[2]
@@ -314,7 +423,8 @@ def stretch_inp_geometry(
     output_path.write_text(new_text, encoding="utf-8")
 
     return StretchSummary(
-        node_count=len(nodes),
+        node_count=len(stretch_nodes),
         original_lengths=original_lengths,
         new_lengths=tuple(new_lengths),
+        entity_set=entity_name,
     )

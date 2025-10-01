@@ -7,6 +7,7 @@ from .converter import (
     StepParseError,
     StretchSummary,
     convert_step_to_inp,
+    list_inp_entity_sets,
     stretch_inp_geometry,
 )
 
@@ -17,5 +18,6 @@ __all__ = [
     "StepParseError",
     "StretchSummary",
     "convert_step_to_inp",
+    "list_inp_entity_sets",
     "stretch_inp_geometry",
 ]
