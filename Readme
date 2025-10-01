@@ -1,1 +1,73 @@
-Mesh to open-foam
+# STEP to INP Mesh Converter
+
+This repository hosts a lightweight Python project that demonstrates how a STEP
+(``.stp``/``.step``) model can be turned into an ABAQUS ``.inp`` mesh file.  The
+project ships both a PyQt5 desktop application and a command line interface.
+While the meshing routine itself is deliberately simple—it extracts explicit
+coordinate triples that exist inside the STEP file—it lays out the scaffolding
+required for integrating more sophisticated OpenFOAM or ``gmsh`` driven
+pipelines.
+
+## Project layout
+
+```
+.
+├── main.py                 # Command line entry point
+├── requirements.txt        # Third party dependencies
+└── src
+    └── mesh_converter
+        ├── __init__.py
+        ├── converter.py    # STEP → INP conversion helpers
+        └── gui.py          # PyQt5 desktop application
+```
+
+## Installation
+
+Create a virtual environment (optional but recommended) and install the project
+dependencies:
+
+```
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+## Using the GUI
+
+Launch the PyQt5 interface with:
+
+```
+PYTHONPATH=src python -m mesh_converter.gui
+```
+
+Choose a ``.stp``/``.step`` input file and an ``.inp`` destination path, then
+press **Convert**.  The application will display a summary of the generated mesh
+once the conversion is complete.
+
+## Command line usage
+
+```
+python main.py <input.step> [output.inp]
+```
+
+If no output path is provided the converter writes the ``.inp`` file next to the
+input STEP file using the same stem.
+
+Example:
+
+```
+python main.py examples/sample.step
+```
+
+## Notes on the conversion
+
+- The current implementation extracts all coordinate triples embedded in the
+  STEP document and uses them as mesh nodes.
+- Elements are created by grouping the nodes into triples, yielding a coarse
+  triangular surface mesh suitable for demonstrations.
+- Duplicate coordinates are removed automatically.
+
+This approach keeps the code self-contained so it can run in constrained
+execution environments.  In production you would typically swap the
+``convert_step_to_inp`` implementation for a wrapper around OpenFOAM utilities
+or other high-fidelity meshing tools.
