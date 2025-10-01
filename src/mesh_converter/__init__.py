@@ -8,7 +8,6 @@ from .converter import (
     StretchSummary,
     convert_step_to_inp,
     list_inp_entity_sets,
-    smart_morph_component,
     stretch_inp_geometry,
 )
 
@@ -20,6 +19,5 @@ __all__ = [
     "StretchSummary",
     "convert_step_to_inp",
     "list_inp_entity_sets",
-    "smart_morph_component",
     "stretch_inp_geometry",
 ]

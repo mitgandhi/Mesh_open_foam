@@ -14,9 +14,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import re
-import subprocess
-import tempfile
-import textwrap
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 Coordinate = Tuple[float, float, float]
@@ -431,94 +428,3 @@ def stretch_inp_geometry(
         new_lengths=tuple(new_lengths),
         entity_set=entity_name,
     )
-
-
-def smart_morph_component(
-    hm_file: Path | str,
-    component_name: str,
-    length_change: float,
-    *,
-    fixed_end: bool = True,
-    output_file: Path | str | None = None,
-    hmbatch_command: Sequence[str] | None = None,
-) -> Path:
-    """Morph a HyperMesh component with a smooth transition to preserve connections.
-
-    The routine generates a temporary TCL script that uses HyperMesh's morphing
-    commands to stretch the specified component and launches ``hmbatch`` to
-    execute it.  ``length_change`` controls the absolute translation applied via
-    ``*morphlinear`` along the component's local X direction.  When
-    ``fixed_end`` is ``True`` a secondary node mark is prepared to act as a
-    morph handle, anchoring one end of the component so the opposite end is
-    stretched.
-
-    Parameters
-    ----------
-    hm_file:
-        Path to the source ``.hm`` file containing the component.
-    component_name:
-        Name of the component to morph.
-    length_change:
-        Distance that the selected handle nodes are displaced.
-    fixed_end:
-        When ``True`` the morph keeps one end fixed by creating a handle set
-        using nodes that already belong to the component.  When ``False`` the
-        morph mark is applied to the whole component.
-    output_file:
-        Destination for the morphed model.  Defaults to ``<hm_file stem>_morphed.hm``.
-    hmbatch_command:
-        Override the command used to invoke HyperMesh.  By default ``["hmbatch"]``
-        is executed.
-
-    Returns
-    -------
-    Path
-        Path to the generated morphed HyperMesh file.
-    """
-
-    hm_file = Path(hm_file)
-    if output_file is None:
-        output_path = hm_file.with_name(f"{hm_file.stem}_morphed.hm")
-    else:
-        output_path = Path(output_file)
-
-    if hmbatch_command is None:
-        command = ["hmbatch"]
-    else:
-        command = list(hmbatch_command)
-
-    command.extend(["-tcl"])
-
-    if fixed_end:
-        handle_mark = f"*createmark nodes 2 \"by component\" \"{component_name}\""
-    else:
-        handle_mark = "*createmark nodes 2"
-
-    tcl_script = textwrap.dedent(
-        f"""
-        *feinputwithdata2 "{hm_file}"
-
-        # Select nodes in the target component
-        *createmark nodes 1 "by component" "{component_name}"
-
-        # Optional handle nodes that remain fixed during morphing
-        {handle_mark}
-
-        # Apply morphing with domains and handles
-        *morphlinear nodes 1 1 0 0 0 {length_change}
-
-        *feoutputwithdata "{output_path}"
-        *quit 1
-        """
-    ).strip()
-
-    with tempfile.NamedTemporaryFile("w", suffix=".tcl", delete=False) as script_file:
-        script_path = Path(script_file.name)
-        script_file.write(tcl_script)
-
-    try:
-        subprocess.run(command + [str(script_path)], check=True)
-    finally:
-        script_path.unlink(missing_ok=True)
-
-    return output_path
