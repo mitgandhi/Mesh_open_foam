@@ -40,13 +40,13 @@ class ConversionSummary:
     ignored_points: int = 0
 
 
-@dataclass
-class StretchSummary:
-    """Summary of the INP stretching result."""
 
-    node_count: int
-    original_lengths: Tuple[float, float, float]
-    new_lengths: Tuple[float, float, float]
+_COORDINATE_PATTERN = re.compile(
+    r"\(\s*(?P<x>[-+]?[0-9]*\.?[0-9]+(?:[Ee][-+]?[0-9]+)?)"
+    r"\s*[,;]\s*(?P<y>[-+]?[0-9]*\.?[0-9]+(?:[Ee][-+]?[0-9]+)?)"
+    r"\s*[,;]\s*(?P<z>[-+]?[0-9]*\.?[0-9]+(?:[Ee][-+]?[0-9]+)?)\s*\)"
+)
+
 
 
 class StepParseError(RuntimeError):
