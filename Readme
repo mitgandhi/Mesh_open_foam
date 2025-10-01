@@ -59,6 +59,19 @@ Example:
 python main.py examples/sample.step
 ```
 
+### Stretching existing INP meshes
+
+You can also provide an existing ``.inp`` file and extend its bounding box along
+one or more axes.  The minimum coordinate along each axis stays fixed while the
+range grows by the requested amount:
+
+```
+python main.py mesh.inp stretched_mesh.inp --extend-x 5 --extend-y 2.5
+```
+
+When no output path is given the script writes to ``<input>_stretched.inp``.
+Axis extensions require the corresponding dimension to have a non-zero range.
+
 ## Notes on the conversion
 
 - The current implementation extracts all coordinate triples embedded in the

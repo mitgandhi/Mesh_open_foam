@@ -20,19 +20,33 @@ Coordinate = Tuple[float, float, float]
 
 
 @dataclass
+class _NodeRecord:
+    """Internal representation of a node line inside an INP file."""
+
+    line_index: int
+    node_id: int
+    x: float
+    y: float
+    z: float
+    suffix: str
+
+
+@dataclass
 class ConversionSummary:
-    """Summary of the conversion result."""
+    """Summary of the STEP to INP conversion result."""
 
     node_count: int
     element_count: int
     ignored_points: int = 0
 
 
-_COORDINATE_PATTERN = re.compile(
-    r"\(\s*(?P<x>[-+]?[0-9]*\.?[0-9]+(?:[Ee][-+]?[0-9]+)?)"
-    r"\s*,\s*(?P<y>[-+]?[0-9]*\.?[0-9]+(?:[Ee][-+]?[0-9]+)?)"
-    r"\s*,\s*(?P<z>[-+]?[0-9]*\.?[0-9]+(?:[Ee][-+]?[0-9]+)?)\s*\)"
-)
+@dataclass
+class StretchSummary:
+    """Summary of the INP stretching result."""
+
+    node_count: int
+    original_lengths: Tuple[float, float, float]
+    new_lengths: Tuple[float, float, float]
 
 
 class StepParseError(RuntimeError):
@@ -41,6 +55,25 @@ class StepParseError(RuntimeError):
 
 class InputFileError(RuntimeError):
     """Raised when input validation fails."""
+
+
+class InpParseError(RuntimeError):
+    """Raised when the INP file cannot be parsed."""
+
+
+_COORDINATE_PATTERN = re.compile(
+    r"\(\s*(?P<x>[-+]?[0-9]*\.?[0-9]+(?:[Ee][-+]?[0-9]+)?)"
+    r"\s*,\s*(?P<y>[-+]?[0-9]*\.?[0-9]+(?:[Ee][-+]?[0-9]+)?)"
+    r"\s*,\s*(?P<z>[-+]?[0-9]*\.?[0-9]+(?:[Ee][-+]?[0-9]+)?)\s*\)"
+)
+
+_NODE_LINE_PATTERN = re.compile(
+    r"\s*(?P<id>\d+)\s*,\s*"
+    r"(?P<x>[-+]?[0-9]*\.?[0-9]+(?:[Ee][-+]?[0-9]+)?)\s*,\s*"
+    r"(?P<y>[-+]?[0-9]*\.?[0-9]+(?:[Ee][-+]?[0-9]+)?)\s*,\s*"
+    r"(?P<z>[-+]?[0-9]*\.?[0-9]+(?:[Ee][-+]?[0-9]+)?)"
+    r"(?P<suffix>.*)$"
+)
 
 
 def _normalise_coordinates(coordinates: Iterable[Coordinate]) -> List[Coordinate]:
@@ -156,4 +189,132 @@ def convert_step_to_inp(input_path: Path | str, output_path: Path | str) -> Conv
         node_count=len(nodes),
         element_count=len(elements),
         ignored_points=ignored_points,
+    )
+
+
+def _collect_inp_nodes(lines: Sequence[str]) -> List[_NodeRecord]:
+    """Extract node definitions from the textual representation of an INP file."""
+
+    nodes: List[_NodeRecord] = []
+    in_node_block = False
+
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+
+        if stripped.startswith("*"):
+            in_node_block = stripped.lower().startswith("*node")
+            continue
+
+        if not in_node_block or not stripped:
+            continue
+
+        match = _NODE_LINE_PATTERN.match(line)
+        if not match:
+            raise InpParseError(f"Failed to parse node definition on line {index + 1}: {line.strip()}")
+
+        nodes.append(
+            _NodeRecord(
+                line_index=index,
+                node_id=int(match.group("id")),
+                x=float(match.group("x")),
+                y=float(match.group("y")),
+                z=float(match.group("z")),
+                suffix=match.group("suffix"),
+            )
+        )
+
+    return nodes
+
+
+def stretch_inp_geometry(
+    input_path: Path | str,
+    output_path: Path | str,
+    extend_x: float = 0.0,
+    extend_y: float = 0.0,
+    extend_z: float = 0.0,
+) -> StretchSummary:
+    """Stretch the spatial extents of an INP mesh along the principal axes.
+
+    The function keeps the minimum coordinate along each axis fixed and scales the
+    relative positions of the nodes so that the bounding box grows by the
+    requested *extend_* amount.  For example, if the X range currently spans
+    10 mm and ``extend_x`` is ``5`` the new range will measure 15 mm while the
+    minimum X coordinate remains unchanged.
+    """
+
+    input_path = Path(input_path)
+    output_path = Path(output_path)
+
+    if not input_path.exists():
+        raise InputFileError(f"Input INP file does not exist: {input_path}")
+
+    if input_path.suffix.lower() != ".inp":
+        raise InputFileError("Input file must have a .inp extension when stretching geometry")
+
+    text = input_path.read_text(encoding="utf-8", errors="ignore")
+    lines = text.splitlines()
+    trailing_newline = text.endswith("\n")
+
+    nodes = _collect_inp_nodes(lines)
+    if not nodes:
+        raise InpParseError("No *Node section found in the INP file")
+
+    xs = [node.x for node in nodes]
+    ys = [node.y for node in nodes]
+    zs = [node.z for node in nodes]
+
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    min_z, max_z = min(zs), max(zs)
+
+    original_lengths = (
+        max_x - min_x,
+        max_y - min_y,
+        max_z - min_z,
+    )
+
+    extensions = (extend_x, extend_y, extend_z)
+    scales: List[float] = []
+    new_lengths: List[float] = []
+
+    for axis, length, extension in zip("XYZ", original_lengths, extensions):
+        if length == 0.0:
+            if abs(extension) > 0.0:
+                raise InpParseError(
+                    f"Cannot adjust length along {axis} for a zero-thickness domain"
+                )
+            scales.append(1.0)
+            new_lengths.append(length)
+            continue
+
+        new_length = length + extension
+        if new_length <= 0.0:
+            raise InpParseError(
+                f"Requested extension along {axis} results in a non-positive length"
+            )
+
+        scales.append(new_length / length)
+        new_lengths.append(new_length)
+
+    new_lines = list(lines)
+
+    for node in nodes:
+        new_x = min_x + (node.x - min_x) * scales[0]
+        new_y = min_y + (node.y - min_y) * scales[1]
+        new_z = min_z + (node.z - min_z) * scales[2]
+
+        new_lines[node.line_index] = (
+            f"{node.node_id}, {new_x:.6f}, {new_y:.6f}, {new_z:.6f}{node.suffix}"
+        )
+
+    new_text = "\n".join(new_lines)
+    if trailing_newline:
+        new_text += "\n"
+
+    output_path.write_text(new_text, encoding="utf-8")
+
+    return StretchSummary(
+        node_count=len(nodes),
+        original_lengths=original_lengths,
+        new_lengths=tuple(new_lengths),
     )
