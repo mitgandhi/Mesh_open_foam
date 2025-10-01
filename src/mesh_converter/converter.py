@@ -49,6 +49,27 @@ class StretchSummary:
     new_lengths: Tuple[float, float, float]
     entity_set: str | None = None
 
+    def __init__(
+        self,
+        node_count: int,
+        original_lengths: Tuple[float, float, float],
+        new_lengths: Tuple[float, float, float],
+        entity_set: str | None = None,
+    ) -> None:
+        """Initialise a :class:`StretchSummary` instance.
+
+        Some Python 3.13 builds appear to lose the dataclass generated ``__init__``
+        method which results in ``StretchSummary()`` raising ``TypeError`` when
+        called with arguments.  Providing an explicit initialiser guarantees the
+        runtime behaviour across Python versions while keeping the convenience of
+        the dataclass representation.
+        """
+
+        self.node_count = int(node_count)
+        self.original_lengths = tuple(original_lengths)  # type: ignore[assignment]
+        self.new_lengths = tuple(new_lengths)  # type: ignore[assignment]
+        self.entity_set = entity_set
+
 
 
 _COORDINATE_PATTERN = re.compile(
